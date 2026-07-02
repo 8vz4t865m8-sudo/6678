@@ -1,0 +1,21 @@
+name: Build
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          clang -arch arm64 \
+            -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
+            -framework Foundation \
+            -miphoneos-version-min=15.0 \
+            -fobjc-arc \
+            -dynamiclib \
+            Tweak.m \
+            -o MyRadarHook.dylib
+          codesign -f -s - MyRadarHook.dylib
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MyRadarHook
+          path: MyRadarHook.dylib
