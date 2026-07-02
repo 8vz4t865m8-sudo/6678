@@ -5,16 +5,26 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: |
+      
+      - name: 安装 Theos
+        run: bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+      
+      - name: 编译
+        run: |
+          export THEOS=$HOME/theos
+          $THEOS/bin/logos.pl Tweak.xm > Tweak.mm
           clang -arch arm64 \
             -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
+            -I$THEOS/include \
+            -I$THEOS/vendor/include \
             -framework Foundation \
             -miphoneos-version-min=15.0 \
             -fobjc-arc \
             -dynamiclib \
-            Tweak.m \
+            Tweak.mm \
             -o MyRadarHook.dylib
           codesign -f -s - MyRadarHook.dylib
+          
       - uses: actions/upload-artifact@v4
         with:
           name: MyRadarHook
