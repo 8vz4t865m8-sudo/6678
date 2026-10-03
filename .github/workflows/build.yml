@@ -1,61 +1,72 @@
-name: build-diag-dylib
+name: Build CoreSetFix
 
 on:
-  workflow_dispatch:
   push:
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: macos-14
     steps:
-      - name: 拉代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 编译（arm64e + arm64）
+      - name: 环境信息
         run: |
-          set -e
-          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          echo "SDK = $SDK"
+          xcodebuild -version
+          echo "SDK = $(xcrun --sdk iphoneos --show-sdk-path)"
 
-          # 公共参数：框架放在源文件之后，让链接器先看到未定义符号再去找框架
-          # -Wl,-undefined,dynamic_lookup：注入型 dylib 的标准做法，
-          #   系统符号（UIKit/CoreGraphics/libSystem）运行时由宿主 App 提供，
-          #   彻底杜绝 "Undefined symbols ... _CGRectInset" 这类链接期报错。
-          LD_COMMON="-framework Foundation -framework UIKit -framework CoreGraphics -framework CoreFoundation -framework QuartzCore -Wl,-undefined,dynamic_lookup"
+      - name: 编译 arm64e + arm64
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          mkdir -p build
+          echo "源码行数: $(wc -l < CoreSetFix.m)"
+          grep -q "CoreSetFix" CoreSetFix.m || { echo "源码文件不对"; exit 1; }
 
-          echo "----- 编译 arm64e -----"
-          xcrun -sdk iphoneos clang -target arm64e-apple-ios17.0 -isysroot "$SDK" \
-            -dynamiclib -O2 -fobjc-arc -Wno-everything \
-            -install_name @executable_path/Frameworks/CoreSetDiag.dylib \
-            -o CoreSetDiag.arm64e.dylib CoreSetDiag.m \
-            $LD_COMMON
+          build_arch () {
+            ARCH="$1"
+            echo "----- 编译 $ARCH -----"
+            xcrun --sdk iphoneos clang \
+              -arch "$ARCH" -target "${ARCH}-apple-ios17.0" \
+              -isysroot "$SDK" \
+              -O2 -fblocks -fno-objc-arc \
+              -Wall -Wno-incompatible-pointer-types \
+              -dynamiclib \
+              -install_name @rpath/CoreSetFix.dylib \
+              -o "build/CoreSetFix-$ARCH.dylib" \
+              CoreSetFix.m \
+              -Wl,-undefined,dynamic_lookup
+            echo "  → $(lipo -info build/CoreSetFix-$ARCH.dylib)"
+          }
 
-          echo "----- 编译 arm64 -----"
-          xcrun -sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
-            -dynamiclib -O2 -fobjc-arc -Wno-everything \
-            -install_name @executable_path/Frameworks/CoreSetDiag.dylib \
-            -o CoreSetDiag.arm64.dylib CoreSetDiag.m \
-            $LD_COMMON
+          build_arch arm64e
+          build_arch arm64
 
-          echo "----- 合并 fat -----"
-          lipo -create -output CoreSetDiag.dylib CoreSetDiag.arm64e.dylib CoreSetDiag.arm64.dylib
+          echo "----- 合并 fat 包 -----"
+          lipo -create \
+            -output build/CoreSetFix.dylib \
+            build/CoreSetFix-arm64e.dylib \
+            build/CoreSetFix-arm64.dylib
 
-          echo "===== 架构核对（必须有 arm64e，不然注入必崩）====="
-          lipo -info CoreSetDiag.dylib
-          lipo -info CoreSetDiag.dylib | grep -q "arm64e" || { echo "FATAL: 没有 arm64e 切片，禁止使用"; exit 1; }
-          lipo -info CoreSetDiag.dylib | grep -q "arm64"  || { echo "FATAL: 没有 arm64 切片"; exit 1; }
+          echo "===== 产物信息 ====="
+          lipo -info build/CoreSetFix.dylib
+          file build/CoreSetFix.dylib
+          size=$(stat -f%z build/CoreSetFix.dylib)
+          echo "文件大小: $size 字节"
 
-          echo "===== 未解析符号清单（应只剩系统符号）====="
-          nm -u CoreSetDiag.dylib | sort -u | head -40 || true
-          if nm -u CoreSetDiag.dylib | grep -q "CGRect"; then
-            echo "FATAL: CGRect 系符号仍未解析，链接参数有问题"; exit 1
-          fi
-          echo "OK: CGRect 系符号已全部内联，无残留"
+          # 硬核对:必须有 arm64e 和 arm64 两个切片
+          lipo -info build/CoreSetFix.dylib | grep -q "arm64e" || { echo "!! 缺少 arm64e 切片,停止"; exit 1; }
+          lipo -info build/CoreSetFix.dylib | grep -q "arm64 "  || { echo "!! 缺少 arm64 切片,停止"; exit 1; }
+          echo "双切片确认 ✔"
 
-          mkdir -p out && cp CoreSetDiag.dylib out/
+      - name: 打包上传
+        run: |
+          cd build
+          zip -q CoreSetFix-dylib.zip CoreSetFix.dylib
+          ls -la
 
-      - name: 上传产物
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: CoreSetDiag-dylib
-          path: out/CoreSetDiag.dylib
+          name: CoreSetFix-dylib
+          path: build/CoreSetFix-dylib.zip
