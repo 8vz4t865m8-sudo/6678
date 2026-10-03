@@ -237,7 +237,17 @@ static void qxShowUI(NSString *text) {
             UIViewController *vc = [UIViewController new];
             vc.view.backgroundColor = [UIColor colorWithWhite:0 alpha:0.95];
 
-            UITextView *tv = [[UITextView alloc] initWithFrame:CGRectInset(vc.view.bounds, 12, 70)];
+            // 不用 CGRectInset：它是 CoreGraphics 的外部函数符号，链接期容易找不到。
+            // 这里纯手算 frame，零外部依赖。
+            CGRect vb = vc.view.bounds;
+            CGRect tvFrame;
+            tvFrame.origin.x    = 12;
+            tvFrame.origin.y    = 70;
+            tvFrame.size.width  = vb.size.width  - 24;
+            tvFrame.size.height = vb.size.height - 140;
+            if (tvFrame.size.width  < 100) tvFrame.size.width  = 100;
+            if (tvFrame.size.height < 100) tvFrame.size.height = 100;
+            UITextView *tv = [[UITextView alloc] initWithFrame:tvFrame];
             tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
             tv.backgroundColor = [UIColor blackColor];
             tv.textColor = [UIColor colorWithRed:0.4 green:1 blue:0.5 alpha:1];
@@ -247,14 +257,14 @@ static void qxShowUI(NSString *text) {
             [vc.view addSubview:tv];
 
             UIButton *copy = [UIButton buttonWithType:UIButtonTypeSystem];
-            copy.frame = CGRectMake(12, 28, 130, 34);
+            copy.frame = (CGRect){{12, 28}, {130, 34}};
             [copy setTitle:@"复制报告" forState:UIControlStateNormal];
             [copy addTarget:vc action:@selector(qxCopyTapped:) forControlEvents:UIControlEventTouchUpInside];
             objc_setAssociatedObject(copy, "txt", tv.text, OBJC_ASSOCIATION_RETAIN);
             [vc.view addSubview:copy];
 
             UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
-            close.frame = CGRectMake(vc.view.bounds.size.width - 100, 28, 88, 34);
+            close.frame = (CGRect){{vc.view.bounds.size.width - 100, 28}, {88, 34}};
             [close setTitle:@"关闭" forState:UIControlStateNormal];
             [close addTarget:vc action:@selector(qxCloseTapped:) forControlEvents:UIControlEventTouchUpInside];
             [vc.view addSubview:close];
