@@ -16,24 +16,42 @@ jobs:
           set -e
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           echo "SDK = $SDK"
+
+          # 公共参数：框架放在源文件之后，让链接器先看到未定义符号再去找框架
+          # -Wl,-undefined,dynamic_lookup：注入型 dylib 的标准做法，
+          #   系统符号（UIKit/CoreGraphics/libSystem）运行时由宿主 App 提供，
+          #   彻底杜绝 "Undefined symbols ... _CGRectInset" 这类链接期报错。
+          LD_COMMON="-framework Foundation -framework UIKit -framework CoreGraphics -framework CoreFoundation -framework QuartzCore -Wl,-undefined,dynamic_lookup"
+
           echo "----- 编译 arm64e -----"
           xcrun -sdk iphoneos clang -target arm64e-apple-ios17.0 -isysroot "$SDK" \
             -dynamiclib -O2 -fobjc-arc -Wno-everything \
-            -framework Foundation -framework UIKit -framework CoreFoundation \
             -install_name @executable_path/Frameworks/CoreSetDiag.dylib \
-            -o CoreSetDiag.arm64e.dylib CoreSetDiag.m
+            -o CoreSetDiag.arm64e.dylib CoreSetDiag.m \
+            $LD_COMMON
+
           echo "----- 编译 arm64 -----"
           xcrun -sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
             -dynamiclib -O2 -fobjc-arc -Wno-everything \
-            -framework Foundation -framework UIKit -framework CoreFoundation \
             -install_name @executable_path/Frameworks/CoreSetDiag.dylib \
-            -o CoreSetDiag.arm64.dylib CoreSetDiag.m
+            -o CoreSetDiag.arm64.dylib CoreSetDiag.m \
+            $LD_COMMON
+
           echo "----- 合并 fat -----"
           lipo -create -output CoreSetDiag.dylib CoreSetDiag.arm64e.dylib CoreSetDiag.arm64.dylib
+
           echo "===== 架构核对（必须有 arm64e，不然注入必崩）====="
           lipo -info CoreSetDiag.dylib
           lipo -info CoreSetDiag.dylib | grep -q "arm64e" || { echo "FATAL: 没有 arm64e 切片，禁止使用"; exit 1; }
           lipo -info CoreSetDiag.dylib | grep -q "arm64"  || { echo "FATAL: 没有 arm64 切片"; exit 1; }
+
+          echo "===== 未解析符号清单（应只剩系统符号）====="
+          nm -u CoreSetDiag.dylib | sort -u | head -40 || true
+          if nm -u CoreSetDiag.dylib | grep -q "CGRect"; then
+            echo "FATAL: CGRect 系符号仍未解析，链接参数有问题"; exit 1
+          fi
+          echo "OK: CGRect 系符号已全部内联，无残留"
+
           mkdir -p out && cp CoreSetDiag.dylib out/
 
       - name: 上传产物
