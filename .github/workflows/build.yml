@@ -1,73 +1,43 @@
-name: Build CoreSetHack dylib
+name: build-diag-dylib
 
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
-
-permissions:
-  contents: read
+  push:
 
 jobs:
   build:
     runs-on: macos-14
-    timeout-minutes: 20
-
     steps:
-      - name: 取出代码
+      - name: 拉代码
         uses: actions/checkout@v4
 
-      - name: 看看 Xcode 和 iOS SDK
-        run: |
-          xcodebuild -version
-          echo "SDK: $(xcrun --sdk iphoneos --show-sdk-path)"
-
-      - name: 编译 dylib
+      - name: 编译（arm64e + arm64）
         run: |
           set -e
-          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          SRC="CoreSetHack.m"
-          COMMON="-dynamiclib -fobjc-arc -O2 -w -isysroot $SDK -framework Foundation"
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK = $SDK"
+          echo "----- 编译 arm64e -----"
+          xcrun -sdk iphoneos clang -target arm64e-apple-ios17.0 -isysroot "$SDK" \
+            -dynamiclib -O2 -fobjc-arc -Wno-everything \
+            -framework Foundation -framework UIKit -framework CoreFoundation \
+            -install_name @executable_path/Frameworks/CoreSetDiag.dylib \
+            -o CoreSetDiag.arm64e.dylib CoreSetDiag.m
+          echo "----- 编译 arm64 -----"
+          xcrun -sdk iphoneos clang -target arm64-apple-ios17.0 -isysroot "$SDK" \
+            -dynamiclib -O2 -fobjc-arc -Wno-everything \
+            -framework Foundation -framework UIKit -framework CoreFoundation \
+            -install_name @executable_path/Frameworks/CoreSetDiag.dylib \
+            -o CoreSetDiag.arm64.dylib CoreSetDiag.m
+          echo "----- 合并 fat -----"
+          lipo -create -output CoreSetDiag.dylib CoreSetDiag.arm64e.dylib CoreSetDiag.arm64.dylib
+          echo "===== 架构核对（必须有 arm64e，不然注入必崩）====="
+          lipo -info CoreSetDiag.dylib
+          lipo -info CoreSetDiag.dylib | grep -q "arm64e" || { echo "FATAL: 没有 arm64e 切片，禁止使用"; exit 1; }
+          lipo -info CoreSetDiag.dylib | grep -q "arm64"  || { echo "FATAL: 没有 arm64 切片"; exit 1; }
+          mkdir -p out && cp CoreSetDiag.dylib out/
 
-          echo "== 编译 arm64e(这台 App 是 arm64e,必须有这个架构) =="
-          if clang $COMMON -target arm64e-apple-ios15.0 -o out_arm64e.dylib "$SRC"; then
-            echo "arm64e 编译成功"
-          else
-            echo "arm64e 编译失败,退回 arm64"
-            rm -f out_arm64e.dylib
-          fi
-
-          echo "== 编译 arm64(备用,老设备/兼容) =="
-          if clang $COMMON -target arm64-apple-ios15.0 -o out_arm64.dylib "$SRC"; then
-            echo "arm64 编译成功"
-          else
-            echo "arm64 编译失败"
-            rm -f out_arm64.dylib
-          fi
-
-          if [ -f out_arm64e.dylib ] && [ -f out_arm64.dylib ]; then
-            lipo -create out_arm64e.dylib out_arm64.dylib -output CoreSetHack.dylib
-          elif [ -f out_arm64e.dylib ]; then
-            cp out_arm64e.dylib CoreSetHack.dylib
-          elif [ -f out_arm64.dylib ]; then
-            cp out_arm64.dylib CoreSetHack.dylib
-          else
-            echo "两个架构都没编出来,看上面的报错"
-            exit 1
-          fi
-
-          rm -f out_arm64e.dylib out_arm64.dylib
-
-          echo "== 签名(ad-hoc) =="
-          codesign -f -s - CoreSetHack.dylib
-          codesign -dv CoreSetHack.dylib 2>&1 || true
-          lipo -info CoreSetHack.dylib
-          ls -la CoreSetHack.dylib
-
-      - name: 上传成品
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: CoreSetHack-dylib
-          path: CoreSetHack.dylib
-          if-no-files-found: error
-          retention-days: 90
+          name: CoreSetDiag-dylib
+          path: out/CoreSetDiag.dylib
